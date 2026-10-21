@@ -1,0 +1,32 @@
+name: NOVAHiFiRemote
+options:
+  bundleIdPrefix: hu.novahifi
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+targets:
+  NOVAHiFiRemote:
+    type: application
+    platform: iOS
+    sources:
+      - ContentView.swift
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: NOVA Hi-Fi
+        CFBundleIdentifier: hu.novahifi.remote
+        CFBundleVersion: "1"
+        CFBundleShortVersionString: "1.0"
+        UILaunchScreen: {}
+        NSBluetoothAlwaysUsageDescription: "A NOVA Hi-Fi Remote Bluetoothon keresztül vezérli az ESP32-S3 erősítőt."
+        NSLocalNetworkUsageDescription: "Az alkalmazás az otthoni Wi-Fi hálózaton éri el az ESP32-S3 Hi-Fi vezérlőt."
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: hu.novahifi.remote
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"

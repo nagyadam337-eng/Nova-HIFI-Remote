@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>A NOVA Hi-Fi Remote Bluetoothon keresztül vezérli az ESP32-S3 erősítőt.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Az alkalmazás az otthoni Wi-Fi hálózaton éri el az ESP32-S3 Hi-Fi vezérlőt.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

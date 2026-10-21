@@ -1,0 +1,38 @@
+workflows:
+  nova-hifi-ios:
+    name: NOVA Hi-Fi iOS build (unsigned IPA for Sideloadly)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      vars:
+        XCODE_PROJECT: "NOVAHiFiRemote.xcodeproj"
+        XCODE_SCHEME: "NOVAHiFiRemote"
+      xcode: latest
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          brew install xcodegen
+      - name: Generate Xcode project
+        script: |
+          xcodegen generate
+      - name: Build unsigned iOS app
+        script: |
+          xcodebuild \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$CM_BUILD_DIR/build/NOVAHiFiRemote.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            archive
+      - name: Package unsigned IPA
+        script: |
+          APP_PATH="$CM_BUILD_DIR/build/NOVAHiFiRemote.xcarchive/Products/Applications/NOVAHiFiRemote.app"
+          test -d "$APP_PATH"
+          mkdir -p "$CM_BUILD_DIR/ipa/Payload"
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/ipa/Payload/"
+          cd "$CM_BUILD_DIR/ipa"
+          zip -r "$CM_BUILD_DIR/NOVAHiFiRemote-unsigned.ipa" Payload
+    artifacts:
+      - NOVAHiFiRemote-unsigned.ipa
+      - build/NOVAHiFiRemote.xcarchive/**
