@@ -240,7 +240,7 @@ struct ContentView: View {
                                     HStack {
                                         Text(bands[i]).foregroundStyle(.white.opacity(0.85))
                                         Spacer()
-                                        Text("\((controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0) dB")
+                                        Text("\((controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0)) dB")
                                                 .foregroundStyle(.cyan)
                                                 .monospacedDigit()
                                     }.font(.subheadline)
