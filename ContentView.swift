@@ -109,7 +109,7 @@ final class HiFiController: NSObject, ObservableObject {
     }
 }
 
-extension HiFiController: CBCentralManagerDelegate {
+extension HiFiController: @preconcurrency CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn: bleState = "Bluetooth bekapcsolva"
@@ -149,7 +149,7 @@ extension HiFiController: CBCentralManagerDelegate {
     }
 }
 
-extension HiFiController: CBPeripheralDelegate {
+extension HiFiController: @preconcurrency CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let services = peripheral.services else { return }
         for service in services where service.uuid == serviceUUID {
