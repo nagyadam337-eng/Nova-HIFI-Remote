@@ -4,6 +4,7 @@ import CoreBluetooth
 private let serviceUUID = CBUUID(string: "7B3A0001-7D5A-4F2B-9C1A-6E2D8F001001")
 private let controlUUID = CBUUID(string: "7B3A0002-7D5A-4F2B-9C1A-6E2D8F001001")
 private let statusUUID  = CBUUID(string: "7B3A0003-7D5A-4F2B-9C1A-6E2D8F001001")
+private let wifiConfigUUID = CBUUID(string: "7B3A0004-7D5A-4F2B-9C1A-6E2D8F001001")
 
 struct DeviceStatus: Decodable {
     var volume: Int = 35
@@ -23,11 +24,16 @@ final class HiFiController: NSObject, ObservableObject {
     @Published var deviceIP = "192.168.1.100"
     @Published var isScanning = false
     @Published var isConnectedBLE = false
+    @Published var commandText = ""
+    @Published var commandMessage = ""
+    @Published var wifiSSID = ""
+    @Published var wifiPassword = ""
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var controlCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
+    private var wifiConfigCharacteristic: CBCharacteristic?
 
     override init() {
         super.init()
@@ -57,14 +63,21 @@ final class HiFiController: NSObject, ObservableObject {
     }
 
     func send(_ command: String) {
-        // Prefer BLE when connected; otherwise use the ESP32's local Wi-Fi API.
         if let p = peripheral, let characteristic = controlCharacteristic, isConnectedBLE {
             guard let data = command.data(using: .utf8) else { return }
             let type: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
             p.writeValue(data, for: characteristic, type: type)
+            commandMessage = "Elküldve Bluetoothon: \(command)"
         } else {
             sendWiFi(command)
         }
+    }
+
+    func sendTypedCommand() {
+        let command = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { return }
+        send(command)
+        commandText = ""
     }
 
     func refreshWiFi() {
@@ -85,6 +98,21 @@ final class HiFiController: NSObject, ObservableObject {
                 }
             }
         }.resume()
+    }
+
+    func configureWiFi() {
+        let ssid = wifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ssid.isEmpty, let peripheral, let characteristic = wifiConfigCharacteristic, isConnectedBLE else {
+            wifiState = "Előbb csatlakozz Bluetoothon, majd add meg a Wi-Fi hálózat nevét"
+            return
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: ["ssid": ssid, "password": wifiPassword]) else {
+            wifiState = "A Wi-Fi adatok nem küldhetők el"
+            return
+        }
+        let type: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
+        peripheral.writeValue(data, for: characteristic, type: type)
+        wifiState = "Wi-Fi beállítás küldése… A telefon kérheti a Bluetooth párosítást."
     }
 
     private func sendWiFi(_ command: String) {
@@ -109,7 +137,7 @@ final class HiFiController: NSObject, ObservableObject {
     }
 }
 
-extension HiFiController: @preconcurrency CBCentralManagerDelegate {
+extension HiFiController: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn: bleState = "Bluetooth bekapcsolva"
@@ -145,15 +173,16 @@ extension HiFiController: @preconcurrency CBCentralManagerDelegate {
         isConnectedBLE = false
         controlCharacteristic = nil
         statusCharacteristic = nil
+        wifiConfigCharacteristic = nil
         bleState = "Bluetooth bontva"
     }
 }
 
-extension HiFiController: @preconcurrency CBPeripheralDelegate {
+extension HiFiController: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let services = peripheral.services else { return }
         for service in services where service.uuid == serviceUUID {
-            peripheral.discoverCharacteristics([controlUUID, statusUUID], for: service)
+            peripheral.discoverCharacteristics([controlUUID, statusUUID, wifiConfigUUID], for: service)
         }
     }
 
@@ -161,6 +190,7 @@ extension HiFiController: @preconcurrency CBPeripheralDelegate {
         guard let chars = service.characteristics else { return }
         for char in chars {
             if char.uuid == controlUUID { controlCharacteristic = char }
+            if char.uuid == wifiConfigUUID { wifiConfigCharacteristic = char }
             if char.uuid == statusUUID {
                 statusCharacteristic = char
                 peripheral.setNotifyValue(true, for: char)
@@ -170,9 +200,23 @@ extension HiFiController: @preconcurrency CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard characteristic.uuid == statusUUID, let data = characteristic.value,
-              let decoded = try? JSONDecoder().decode(DeviceStatus.self, from: data) else { return }
-        DispatchQueue.main.async { self.status = decoded }
+        guard characteristic.uuid == statusUUID, let data = characteristic.value else { return }
+        if let decoded = try? JSONDecoder().decode(DeviceStatus.self, from: data) {
+            DispatchQueue.main.async { self.status = decoded }
+            return
+        }
+        guard let message = String(data: data, encoding: .utf8) else { return }
+        DispatchQueue.main.async {
+            if message.hasPrefix("WIFI_CONNECTED;IP=") {
+                let ip = String(message.dropFirst("WIFI_CONNECTED;IP=".count))
+                self.deviceIP = ip
+                self.wifiState = "Csatlakozva: \(ip)"
+            } else if message.hasPrefix("WIFI_ERROR") {
+                self.wifiState = "Az ESP32 nem tudott a Wi-Fi-re csatlakozni"
+            } else {
+                self.wifiState = message
+            }
+        }
     }
 }
 
@@ -240,9 +284,7 @@ struct ContentView: View {
                                     HStack {
                                         Text(bands[i]).foregroundStyle(.white.opacity(0.85))
                                         Spacer()
-                                        Text("\((controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0)) dB")
-                                                .foregroundStyle(.cyan)
-                                                .monospacedDigit()
+                                        Text("\(controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0) dB").foregroundStyle(.cyan.monospacedDigit())
                                     }.font(.subheadline)
                                     Slider(value: Binding(
                                         get: { Double(controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0) },
@@ -281,6 +323,40 @@ struct ContentView: View {
                             Text(controller.wifiState).font(.footnote).foregroundStyle(.cyan).frame(maxWidth: .infinity, alignment: .leading)
                             Text("Wi-Fi vezérléshez az iPhone és az ESP32 ugyanazon az otthoni hálózaton legyen.")
                                 .font(.caption).foregroundStyle(.white.opacity(0.55))
+                        }
+
+                        panel {
+                            Text("ESP32 WI-FI BEÁLLÍTÁSA").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                            TextField("Wi-Fi hálózat neve", text: $controller.wifiSSID)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
+                            SecureField("Wi-Fi jelszó", text: $controller.wifiPassword)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
+                            Button { controller.configureWiFi() } label: {
+                                Label("Wi-Fi beállítása Bluetoothon", systemImage: "wifi.badge.plus")
+                                    .frame(maxWidth: .infinity).padding(12).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            Text("A küldéshez legyen aktív Bluetooth-kapcsolat az ESP32-vel. A hálózati adatok csak a párosított Bluetooth-kapcsolaton mennek át.")
+                                .font(.caption).foregroundStyle(.white.opacity(0.55))
+                        }
+
+                        panel {
+                            Text("PARANCS KÜLDÉSE").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                            HStack(spacing: 8) {
+                                TextField("Pl. VOL:40 vagy MUTE:1", text: $controller.commandText)
+                                    .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                                    .submitLabel(.send).onSubmit { controller.sendTypedCommand() }
+                                    .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
+                                Button { controller.sendTypedCommand() } label: {
+                                    Image(systemName: "paperplane.fill").frame(width: 44, height: 44).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 10))
+                                }
+                            }
+                            Text("Támogatott: VOL:0–100, INPUT:0–4, MUTE:0/1, EQ0–EQ4:-12–12")
+                                .font(.caption).foregroundStyle(.white.opacity(0.55))
+                            if !controller.commandMessage.isEmpty {
+                                Text(controller.commandMessage).font(.footnote).foregroundStyle(.cyan)
+                            }
                         }
 
                         Text("NOVA Hi-Fi Remote · vezérlőprototípus").font(.caption2).foregroundStyle(.white.opacity(0.4)).padding(.bottom, 20)
