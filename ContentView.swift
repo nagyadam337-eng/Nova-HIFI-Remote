@@ -1,10 +1,13 @@
 import SwiftUI
 import CoreBluetooth
 
-private let serviceUUID = CBUUID(string: "7B3A0001-7D5A-4F2B-9C1A-6E2D8F001001")
-private let controlUUID = CBUUID(string: "7B3A0002-7D5A-4F2B-9C1A-6E2D8F001001")
-private let statusUUID  = CBUUID(string: "7B3A0003-7D5A-4F2B-9C1A-6E2D8F001001")
-private let wifiConfigUUID = CBUUID(string: "7B3A0004-7D5A-4F2B-9C1A-6E2D8F001001")
+// ==========================================
+// 1. ESP32 FIRMWARE-REL SZINKRONIZÁLT UUID-K
+// ==========================================
+private let serviceUUID = CBUUID(string: "4fa8691a-1065-4642-b113-401489822400")
+private let controlUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+private let statusUUID  = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+private let wifiConfigUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
 
 struct DeviceStatus: Decodable {
     var volume: Int = 35
@@ -47,7 +50,10 @@ final class HiFiController: NSObject, ObservableObject {
         }
         isScanning = true
         bleState = "HiFi-ESP32 keresése…"
-        central.scanForPeripherals(withServices: [serviceUUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        
+        // Szűrés nélkül indítjuk a keresést, hogy biztosan megtalálja a modult
+        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
             guard let self else { return }
             if self.isScanning {
@@ -149,13 +155,17 @@ extension HiFiController: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
-        guard peripheral.name == "HiFi-ESP32" || advertisementData[CBAdvertisementDataLocalNameKey] as? String == "HiFi-ESP32" else { return }
-        self.peripheral = peripheral
-        self.peripheral?.delegate = self
-        central.stopScan()
-        isScanning = false
-        bleState = "Csatlakozás: HiFi-ESP32…"
-        central.connect(peripheral, options: nil)
+        let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? ""
+        
+        // Elfogadjuk, ha HiFi-ESP32 vagy Nova szerepel a névben
+        if name.contains("HiFi-ESP32") || name.contains("Nova") {
+            self.peripheral = peripheral
+            self.peripheral?.delegate = self
+            central.stopScan()
+            isScanning = false
+            bleState = "Csatlakozás: \(name)…"
+            central.connect(peripheral, options: nil)
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -182,19 +192,18 @@ extension HiFiController: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let services = peripheral.services else { return }
         for service in services where service.uuid == serviceUUID {
-            peripheral.discoverCharacteristics([controlUUID, statusUUID, wifiConfigUUID], for: service)
+            peripheral.discoverCharacteristics([controlUUID], for: service)
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard let chars = service.characteristics else { return }
         for char in chars {
-            if char.uuid == controlUUID { controlCharacteristic = char }
-            if char.uuid == wifiConfigUUID { wifiConfigCharacteristic = char }
-            if char.uuid == statusUUID {
+            if char.uuid == controlUUID {
+                controlCharacteristic = char
                 statusCharacteristic = char
+                wifiConfigCharacteristic = char
                 peripheral.setNotifyValue(true, for: char)
-                peripheral.readValue(for: char)
             }
         }
     }
@@ -293,7 +302,7 @@ struct ContentView: View {
                                             controller.status.eq[i] = Int(value)
                                         }
                                     ), in: -12...12, step: 1) { editing in
-                                        if !editing { controller.send("EQ\(i):\(controller.status.eq[i])") }
+                                        if !editing { controller.send("EQ:\(i):\(controller.status.eq[i])") }
                                     }.tint(.cyan)
                                 }
                             }
@@ -352,7 +361,7 @@ struct ContentView: View {
                                     Image(systemName: "paperplane.fill").frame(width: 44, height: 44).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 10))
                                 }
                             }
-                            Text("Támogatott: VOL:0–100, INPUT:0–4, MUTE:0/1, EQ0–EQ4:-12–12")
+                            Text("Támogatott: VOL:0–100, INPUT:0–4, MUTE:0/1, EQ:0–4:-12–12")
                                 .font(.caption).foregroundStyle(.white.opacity(0.55))
                             if !controller.commandMessage.isEmpty {
                                 Text(controller.commandMessage).font(.footnote).foregroundStyle(.cyan)
