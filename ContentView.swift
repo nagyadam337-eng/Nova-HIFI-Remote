@@ -198,32 +198,50 @@ extension HiFiController: CBPeripheralDelegate {
 }
 
 // ==========================================
-// SWIFTUI FELÜLET MENÜSÁVVAL ÉS AKTIÓKKAL
+// SEGYÉD PANEL VIEW (Minden nézet eléri)
+// ==========================================
+struct CardPanel<Content: View>: View {
+    let content: Content
+    
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(red: 0.06, green: 0.13, blue: 0.20).opacity(0.95))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.09), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+// ==========================================
+// SWIFTUI FELÜLET MENÜSÁVVAL
 // ==========================================
 struct ContentView: View {
     @StateObject private var controller = HiFiController()
     
     var body: some View {
         TabView {
-            // 1. TAB: FŐ VEZÉRLŐ & EQ
             MainControlsView(controller: controller)
                 .tabItem {
                     Label("Vezérlés", systemImage: "slider.horizontal.3")
                 }
             
-            // 2. TAB: INTERNET RÁDIÓ CSATORNÁK
-            RadioView(controller: controller)
+            RadioStationView(controller: controller)
                 .tabItem {
                     Label("Rádió", systemImage: "radio.fill")
                 }
             
-            // 3. TAB: KAPCSOLAT & WI-FI BEÁLLÍTÁSOK
             SettingsView(controller: controller)
                 .tabItem {
                     Label("Kapcsolat", systemImage: "wifi")
                 }
             
-            // 4. TAB: MANUÁLIS PARANCSOK
             ConsoleView(controller: controller)
                 .tabItem {
                     Label("Konzol", systemImage: "terminal.fill")
@@ -234,9 +252,7 @@ struct ContentView: View {
     }
 }
 
-// ------------------------------------------
-// 1. FŐ VEZÉRLŐ ÉS EQ NÉZET
-// ------------------------------------------
+// 1. FŐ VEZÉRLŐ NÉZET
 struct MainControlsView: View {
     @ObservedObject var controller: HiFiController
     private let inputs = ["Bluetooth", "AUX", "USB audio", "Wi-Fi audio", "Internet radio"]
@@ -248,7 +264,6 @@ struct MainControlsView: View {
             
             ScrollView {
                 VStack(spacing: 16) {
-                    // Fejléc
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("NOVA").font(.system(size: 28, weight: .black, design: .rounded)).foregroundStyle(Color.cyan)
@@ -258,8 +273,7 @@ struct MainControlsView: View {
                         Image(systemName: "waveform").font(.system(size: 26, weight: .medium)).foregroundStyle(.cyan)
                     }.padding(.top, 8)
 
-                    // BEMENET VÁLASZTÓ (Az aktív bemenet ragyogó kék!)
-                    panel {
+                    CardPanel {
                         Text("AKTÍV BEMENET").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
                         
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
@@ -273,7 +287,6 @@ struct MainControlsView: View {
                                         .font(.subheadline.weight(.semibold))
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 12)
-                                        // Dinamikus kék kiemelés az aktív gombra!
                                         .background(controller.status.inputIndex == i ? Color.cyan : Color.white.opacity(0.08))
                                         .foregroundStyle(controller.status.inputIndex == i ? Color.black : Color.white)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -283,8 +296,7 @@ struct MainControlsView: View {
                         }
                     }
 
-                    // HANGERŐ & NÉMÍTÁS
-                    panel {
+                    CardPanel {
                         HStack {
                             Text("HANGERŐ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
                             Spacer()
@@ -308,8 +320,7 @@ struct MainControlsView: View {
                         }.foregroundStyle(.white)
                     }
 
-                    // ÖTSÁVOS EQ
-                    panel {
+                    CardPanel {
                         Text("ÖTSÁVOS EQ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
                         ForEach(0..<5, id: \.self) { i in
                             VStack(spacing: 4) {
@@ -336,10 +347,8 @@ struct MainControlsView: View {
     }
 }
 
-// ------------------------------------------
-// 2. INTERNET RÁDIÓ CSATORNAVÁLASZTÓ NÉZET
-// ------------------------------------------
-struct RadioView: View {
+// 2. RÁDIÓ NÉZET
+struct RadioStationView: View {
     @ObservedObject var controller: HiFiController
     
     let stations: [RadioStation] = [
@@ -366,7 +375,7 @@ struct RadioView: View {
                         Image(systemName: "radio").font(.system(size: 26, weight: .medium)).foregroundStyle(.cyan)
                     }.padding(.top, 8)
 
-                    panel {
+                    CardPanel {
                         Text("AKTUÁLIS ADÓ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
                         HStack {
                             Image(systemName: "antenna.radiowaves.left.and.right").font(.title).foregroundStyle(.cyan)
@@ -374,12 +383,10 @@ struct RadioView: View {
                         }
                     }
 
-                    // Adók Listája
                     VStack(spacing: 10) {
                         ForEach(stations) { station in
                             Button {
                                 controller.status.currentRadio = station.name
-                                // Automatikusan átvált Internet Radio bemenetre (4-es index) és elküldi a rádió ID-t
                                 controller.status.inputIndex = 4
                                 controller.status.input = "Internet radio"
                                 controller.send("INPUT:4")
@@ -403,4 +410,124 @@ struct RadioView: View {
                                     }
                                 }
                                 .padding(12)
-                                .background(controller.status.currentRadio == station.name ? Color.cyan.opacity(0.15) : Color(
+                                .background(controller.status.currentRadio == station.name ? Color.cyan.opacity(0.15) : Color(red: 0.06, green: 0.13, blue: 0.20).opacity(0.95))
+                                .overlay(RoundedRectangle(cornerRadius: 14).stroke(controller.status.currentRadio == station.name ? Color.cyan : Color.white.opacity(0.09), lineWidth: 1))
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                            }
+                        }
+                    }
+                }.padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+// 3. KAPCSOLAT NÉZET
+struct SettingsView: View {
+    @ObservedObject var controller: HiFiController
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.025, green: 0.07, blue: 0.12), Color(red: 0.05, green: 0.15, blue: 0.23)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            
+            ScrollView {
+                VStack(spacing: 16) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("KAPCSOLAT").font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.cyan)
+                            Text("BLUETOOTH ÉS WI-FI").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(.white.opacity(0.65))
+                        }
+                        Spacer()
+                        Image(systemName: "network").font(.system(size: 26, weight: .medium)).foregroundStyle(.cyan)
+                    }.padding(.top, 8)
+
+                    CardPanel {
+                        Text("BLUETOOTH STATUSZ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                        Text(controller.bleState).font(.footnote).foregroundStyle(.cyan)
+                        HStack {
+                            Button { controller.scanBLE() } label: {
+                                Label("BLE keresés", systemImage: "dot.radiowaves.left.and.right")
+                                    .frame(maxWidth: .infinity).padding(12).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            Button { controller.disconnectBLE() } label: {
+                                Text("Leválasztás").frame(maxWidth: .infinity).padding(12).background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 12))
+                            }.foregroundStyle(.white)
+                        }
+                    }
+
+                    CardPanel {
+                        Text("WI-FI KAPCSOLAT TESZT").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                        TextField("ESP32 IP-címe", text: $controller.deviceIP)
+                            .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
+                        Button { controller.refreshWiFi() } label: {
+                            Label("Wi-Fi kapcsolat tesztelése", systemImage: "wifi")
+                                .frame(maxWidth: .infinity).padding(12).background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 12))
+                        }.foregroundStyle(.white)
+                        Text(controller.wifiState).font(.footnote).foregroundStyle(.cyan)
+                    }
+
+                    CardPanel {
+                        Text("WI-FI HÁLÓZAT BEÁLLÍTÁSA").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                        TextField("Wi-Fi hálózat neve", text: $controller.wifiSSID)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
+                        SecureField("Wi-Fi jelszó", text: $controller.wifiPassword)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
+                        Button { controller.configureWiFi() } label: {
+                            Label("Wi-Fi beállítása Bluetoothon", systemImage: "wifi.badge.plus")
+                                .frame(maxWidth: .infinity).padding(12).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                }.padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+// 4. KONZOL NÉZET
+struct ConsoleView: View {
+    @ObservedObject var controller: HiFiController
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.025, green: 0.07, blue: 0.12), Color(red: 0.05, green: 0.15, blue: 0.23)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            
+            VStack(spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("KONZOL").font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.cyan)
+                        Text("EGYEDI PARANCSOK KÜLDÉSE").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(.white.opacity(0.65))
+                    }
+                    Spacer()
+                    Image(systemName: "terminal.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.cyan)
+                }.padding(.top, 8)
+
+                CardPanel {
+                    Text("PARANCS KÜLDÉSE").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                    HStack(spacing: 8) {
+                        TextField("Pl. VOL:40, RADIO:1", text: $controller.commandText)
+                            .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                            .submitLabel(.send).onSubmit { controller.sendTypedCommand() }
+                            .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
+                        Button { controller.sendTypedCommand() } label: {
+                            Image(systemName: "paperplane.fill").frame(width: 44, height: 44).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+                    if !controller.commandMessage.isEmpty {
+                        Text(controller.commandMessage).font(.footnote).foregroundStyle(.cyan)
+                    }
+                }
+                Spacer()
+            }.padding(.horizontal, 16)
+        }
+    }
+}
+
+@main
+struct NOVAHiFiRemoteApp: App {
+    var body: some Scene {
+        WindowGroup { ContentView() }
+    }
+}
