@@ -2,12 +2,10 @@ import SwiftUI
 import CoreBluetooth
 
 // ==========================================
-// 1. ESP32 FIRMWARE-REL SZINKRONIZÁLT UUID-K
+// ESP32 FIRMWARE-REL SZINKRONIZÁLT UUID-K
 // ==========================================
 private let serviceUUID = CBUUID(string: "4fa8691a-1065-4642-b113-401489822400")
 private let controlUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
-private let statusUUID  = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
-private let wifiConfigUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
 
 struct DeviceStatus: Decodable {
     var volume: Int = 35
@@ -15,8 +13,16 @@ struct DeviceStatus: Decodable {
     var input: String = "AUX"
     var mute: Bool = false
     var eq: [Int] = [0, 0, 0, 0, 0]
+    var currentRadio: String = "Rádió 1"
     var lastCommand: String = "Nincs kapcsolat"
     var wifi: String = ""
+}
+
+struct RadioStation: Identifiable {
+    let id: Int
+    let name: String
+    let freqOrGenre: String
+    let icon: String
 }
 
 @MainActor
@@ -35,8 +41,6 @@ final class HiFiController: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var controlCharacteristic: CBCharacteristic?
-    private var statusCharacteristic: CBCharacteristic?
-    private var wifiConfigCharacteristic: CBCharacteristic?
 
     override init() {
         super.init()
@@ -50,8 +54,6 @@ final class HiFiController: NSObject, ObservableObject {
         }
         isScanning = true
         bleState = "HiFi-ESP32 keresése…"
-        
-        // Szűrés nélkül indítjuk a keresést, hogy biztosan megtalálja a modult
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
@@ -73,7 +75,7 @@ final class HiFiController: NSObject, ObservableObject {
             guard let data = command.data(using: .utf8) else { return }
             let type: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
             p.writeValue(data, for: characteristic, type: type)
-            commandMessage = "Elküldve Bluetoothon: \(command)"
+            commandMessage = "Elküldve BLE-n: \(command)"
         } else {
             sendWiFi(command)
         }
@@ -100,7 +102,7 @@ final class HiFiController: NSObject, ObservableObject {
                     self.status = decoded
                     self.wifiState = "Csatlakozva: \(self.deviceIP)"
                 } else {
-                    self.wifiState = "Nem érhető el. Azonos Wi-Fi és helyes IP kell."
+                    self.wifiState = "Nem érhető el. Azonos Wi-Fi és IP kell."
                 }
             }
         }.resume()
@@ -108,8 +110,8 @@ final class HiFiController: NSObject, ObservableObject {
 
     func configureWiFi() {
         let ssid = wifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !ssid.isEmpty, let peripheral, let characteristic = wifiConfigCharacteristic, isConnectedBLE else {
-            wifiState = "Előbb csatlakozz Bluetoothon, majd add meg a Wi-Fi hálózat nevét"
+        guard !ssid.isEmpty, let peripheral, let characteristic = controlCharacteristic, isConnectedBLE else {
+            wifiState = "Előbb csatlakozz Bluetoothon!"
             return
         }
         guard let data = try? JSONSerialization.data(withJSONObject: ["ssid": ssid, "password": wifiPassword]) else {
@@ -118,7 +120,7 @@ final class HiFiController: NSObject, ObservableObject {
         }
         let type: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
         peripheral.writeValue(data, for: characteristic, type: type)
-        wifiState = "Wi-Fi beállítás küldése… A telefon kérheti a Bluetooth párosítást."
+        wifiState = "Wi-Fi beállítás küldése…"
     }
 
     private func sendWiFi(_ command: String) {
@@ -136,7 +138,7 @@ final class HiFiController: NSObject, ObservableObject {
                     self.status = decoded
                     self.wifiState = "Csatlakozva: \(self.deviceIP)"
                 } else {
-                    self.wifiState = "Parancs sikertelen. Ellenőrizd az IP-t és a Wi-Fi-t."
+                    self.wifiState = "Parancs sikertelen. Ellenőrizd az IP-t."
                 }
             }
         }.resume()
@@ -149,15 +151,12 @@ extension HiFiController: CBCentralManagerDelegate {
         case .poweredOn: bleState = "Bluetooth bekapcsolva"
         case .poweredOff: bleState = "Bluetooth kikapcsolva"
         case .unauthorized: bleState = "Bluetooth engedély szükséges"
-        case .unsupported: bleState = "BLE nem támogatott"
         default: bleState = "Bluetooth állapot: \(central.state.rawValue)"
         }
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? ""
-        
-        // Elfogadjuk, ha HiFi-ESP32 vagy Nova szerepel a névben
         if name.contains("HiFi-ESP32") || name.contains("Nova") {
             self.peripheral = peripheral
             self.peripheral?.delegate = self
@@ -174,16 +173,9 @@ extension HiFiController: CBCentralManagerDelegate {
         peripheral.discoverServices([serviceUUID])
     }
 
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        isConnectedBLE = false
-        bleState = "Bluetooth csatlakozás sikertelen"
-    }
-
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         isConnectedBLE = false
         controlCharacteristic = nil
-        statusCharacteristic = nil
-        wifiConfigCharacteristic = nil
         bleState = "Bluetooth bontva"
     }
 }
@@ -198,199 +190,217 @@ extension HiFiController: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard let chars = service.characteristics else { return }
-        for char in chars {
-            if char.uuid == controlUUID {
-                controlCharacteristic = char
-                statusCharacteristic = char
-                wifiConfigCharacteristic = char
-                peripheral.setNotifyValue(true, for: char)
-            }
-        }
-    }
-
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard characteristic.uuid == statusUUID, let data = characteristic.value else { return }
-        if let decoded = try? JSONDecoder().decode(DeviceStatus.self, from: data) {
-            DispatchQueue.main.async { self.status = decoded }
-            return
-        }
-        guard let message = String(data: data, encoding: .utf8) else { return }
-        DispatchQueue.main.async {
-            if message.hasPrefix("WIFI_CONNECTED;IP=") {
-                let ip = String(message.dropFirst("WIFI_CONNECTED;IP=".count))
-                self.deviceIP = ip
-                self.wifiState = "Csatlakozva: \(ip)"
-            } else if message.hasPrefix("WIFI_ERROR") {
-                self.wifiState = "Az ESP32 nem tudott a Wi-Fi-re csatlakozni"
-            } else {
-                self.wifiState = message
-            }
+        for char in chars where char.uuid == controlUUID {
+            controlCharacteristic = char
+            peripheral.setNotifyValue(true, for: char)
         }
     }
 }
 
+// ==========================================
+// SWIFTUI FELÜLET MENÜSÁVVAL ÉS AKTIÓKKAL
+// ==========================================
 struct ContentView: View {
     @StateObject private var controller = HiFiController()
+    
+    var body: some View {
+        TabView {
+            // 1. TAB: FŐ VEZÉRLŐ & EQ
+            MainControlsView(controller: controller)
+                .tabItem {
+                    Label("Vezérlés", systemImage: "slider.horizontal.3")
+                }
+            
+            // 2. TAB: INTERNET RÁDIÓ CSATORNÁK
+            RadioView(controller: controller)
+                .tabItem {
+                    Label("Rádió", systemImage: "radio.fill")
+                }
+            
+            // 3. TAB: KAPCSOLAT & WI-FI BEÁLLÍTÁSOK
+            SettingsView(controller: controller)
+                .tabItem {
+                    Label("Kapcsolat", systemImage: "wifi")
+                }
+            
+            // 4. TAB: MANUÁLIS PARANCSOK
+            ConsoleView(controller: controller)
+                .tabItem {
+                    Label("Konzol", systemImage: "terminal.fill")
+                }
+        }
+        .tint(.cyan)
+        .preferredColorScheme(.dark)
+    }
+}
+
+// ------------------------------------------
+// 1. FŐ VEZÉRLŐ ÉS EQ NÉZET
+// ------------------------------------------
+struct MainControlsView: View {
+    @ObservedObject var controller: HiFiController
     private let inputs = ["Bluetooth", "AUX", "USB audio", "Wi-Fi audio", "Internet radio"]
     private let bands = ["60 Hz", "150 Hz", "400 Hz", "1 kHz", "6 kHz"]
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(colors: [Color(red: 0.025, green: 0.07, blue: 0.12), Color(red: 0.05, green: 0.15, blue: 0.23)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .ignoresSafeArea()
-                ScrollView {
-                    VStack(spacing: 16) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("NOVA").font(.system(size: 30, weight: .black, design: .rounded)).foregroundStyle(Color.cyan)
-                                Text("HI-FI REMOTE").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(.white.opacity(0.65))
-                            }
-                            Spacer()
-                            Image(systemName: "waveform").font(.system(size: 30, weight: .medium)).foregroundStyle(.cyan)
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.025, green: 0.07, blue: 0.12), Color(red: 0.05, green: 0.15, blue: 0.23)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            
+            ScrollView {
+                VStack(spacing: 16) {
+                    // Fejléc
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("NOVA").font(.system(size: 28, weight: .black, design: .rounded)).foregroundStyle(Color.cyan)
+                            Text("HI-FI VEZÉRLÉS").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(.white.opacity(0.65))
                         }
-                        .padding(.top, 8)
+                        Spacer()
+                        Image(systemName: "waveform").font(.system(size: 26, weight: .medium)).foregroundStyle(.cyan)
+                    }.padding(.top, 8)
 
-                        panel {
-                            Text("AKTÍV BEMENET").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
-                            Text(controller.status.input.uppercased()).font(.system(size: 27, weight: .bold, design: .rounded)).foregroundStyle(.white)
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
-                                ForEach(inputs.indices, id: \.self) { i in
-                                    Button { controller.send("INPUT:\(i)") } label: {
-                                        Text(inputs[i]).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 12)
-                                            .background(controller.status.inputIndex == i ? Color.cyan : Color.white.opacity(0.08))
-                                            .foregroundStyle(controller.status.inputIndex == i ? Color.black : Color.white)
-                                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    // BEMENET VÁLASZTÓ (Az aktív bemenet ragyogó kék!)
+                    panel {
+                        Text("AKTÍV BEMENET").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                        
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
+                            ForEach(inputs.indices, id: \.self) { i in
+                                Button {
+                                    controller.status.inputIndex = i
+                                    controller.status.input = inputs[i]
+                                    controller.send("INPUT:\(i)")
+                                } label: {
+                                    Text(inputs[i])
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        // Dinamikus kék kiemelés az aktív gombra!
+                                        .background(controller.status.inputIndex == i ? Color.cyan : Color.white.opacity(0.08))
+                                        .foregroundStyle(controller.status.inputIndex == i ? Color.black : Color.white)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        .shadow(color: controller.status.inputIndex == i ? Color.cyan.opacity(0.5) : Color.clear, radius: 6)
+                                }
+                            }
+                        }
+                    }
+
+                    // HANGERŐ & NÉMÍTÁS
+                    panel {
+                        HStack {
+                            Text("HANGERŐ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                            Spacer()
+                            Text("\(controller.status.volume)%").font(.title2.bold()).foregroundStyle(.cyan)
+                        }
+                        Slider(value: Binding(
+                            get: { Double(controller.status.volume) },
+                            set: { controller.status.volume = Int($0) }
+                        ), in: 0...100, step: 1) { editing in
+                            if !editing { controller.send("VOL:\(controller.status.volume)") }
+                        }.tint(.cyan)
+                        
+                        Button {
+                            controller.status.mute.toggle()
+                            controller.send("MUTE:\(controller.status.mute ? 1 : 0)")
+                        } label: {
+                            Label(controller.status.mute ? "Némítás feloldása" : "Némítás", systemImage: controller.status.mute ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                                .frame(maxWidth: .infinity).padding(12)
+                                .background(controller.status.mute ? Color.red.opacity(0.8) : Color.white.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }.foregroundStyle(.white)
+                    }
+
+                    // ÖTSÁVOS EQ
+                    panel {
+                        Text("ÖTSÁVOS EQ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                        ForEach(0..<5, id: \.self) { i in
+                            VStack(spacing: 4) {
+                                HStack {
+                                    Text(bands[i]).foregroundStyle(.white.opacity(0.85))
+                                    Spacer()
+                                    Text("\(controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0) dB").foregroundStyle(.cyan).monospacedDigit()
+                                }.font(.subheadline)
+                                Slider(value: Binding(
+                                    get: { Double(controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0) },
+                                    set: { value in
+                                        while controller.status.eq.count < 5 { controller.status.eq.append(0) }
+                                        controller.status.eq[i] = Int(value)
+                                    }
+                                ), in: -12...12, step: 1) { editing in
+                                    if !editing { controller.send("EQ:\(i):\(controller.status.eq[i])") }
+                                }.tint(.cyan)
+                            }
+                        }
+                    }
+                }.padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+// ------------------------------------------
+// 2. INTERNET RÁDIÓ CSATORNAVÁLASZTÓ NÉZET
+// ------------------------------------------
+struct RadioView: View {
+    @ObservedObject var controller: HiFiController
+    
+    let stations: [RadioStation] = [
+        RadioStation(id: 0, name: "Rádió 1", freqOrGenre: "Pop / Mai slágerek", icon: "music.note"),
+        RadioStation(id: 1, name: "Retro Rádió", freqOrGenre: "70-es, 80-as, 90-es évek", icon: "guitars.fill"),
+        RadioStation(id: 2, name: "Rádió Rock", freqOrGenre: "Klasszikus & Modern Rock", icon: "bolt.heart.fill"),
+        RadioStation(id: 3, name: "Music FM", freqOrGenre: "Dance & House Hits", icon: "headphones"),
+        RadioStation(id: 4, name: "Petőfi Rádió", freqOrGenre: "Magyar & Indie Zene", icon: "star.fill"),
+        RadioStation(id: 5, name: "Klubrádió", freqOrGenre: "Hírek & Beszélgetések", icon: "mic.fill")
+    ]
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.025, green: 0.07, blue: 0.12), Color(red: 0.05, green: 0.15, blue: 0.23)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            
+            ScrollView {
+                VStack(spacing: 16) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("INTERNET RÁDIÓ").font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.cyan)
+                            Text("CSATORNA VÁLASZTÁS").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(.white.opacity(0.65))
+                        }
+                        Spacer()
+                        Image(systemName: "radio").font(.system(size: 26, weight: .medium)).foregroundStyle(.cyan)
+                    }.padding(.top, 8)
+
+                    panel {
+                        Text("AKTUÁLIS ADÓ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                        HStack {
+                            Image(systemName: "antenna.radiowaves.left.and.right").font(.title).foregroundStyle(.cyan)
+                            Text(controller.status.currentRadio).font(.title2.bold()).foregroundStyle(.white)
+                        }
+                    }
+
+                    // Adók Listája
+                    VStack(spacing: 10) {
+                        ForEach(stations) { station in
+                            Button {
+                                controller.status.currentRadio = station.name
+                                // Automatikusan átvált Internet Radio bemenetre (4-es index) és elküldi a rádió ID-t
+                                controller.status.inputIndex = 4
+                                controller.status.input = "Internet radio"
+                                controller.send("INPUT:4")
+                                controller.send("RADIO:\(station.id)")
+                            } label: {
+                                HStack(spacing: 14) {
+                                    Image(systemName: station.icon)
+                                        .font(.title2)
+                                        .frame(width: 44, height: 44)
+                                        .background(controller.status.currentRadio == station.name ? Color.cyan : Color.white.opacity(0.1))
+                                        .foregroundStyle(controller.status.currentRadio == station.name ? Color.black : Color.cyan)
+                                        .clipShape(Circle())
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(station.name).font(.headline).foregroundStyle(.white)
+                                        Text(station.freqOrGenre).font(.caption).foregroundStyle(.white.opacity(0.6))
+                                    }
+                                    Spacer()
+                                    if controller.status.currentRadio == station.name {
+                                        Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.cyan)
                                     }
                                 }
-                            }
-                        }
-
-                        panel {
-                            HStack {
-                                Text("HANGERŐ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
-                                Spacer()
-                                Text("\(controller.status.volume)%").font(.title2.bold()).foregroundStyle(.cyan)
-                            }
-                            Slider(value: Binding(
-                                get: { Double(controller.status.volume) },
-                                set: { controller.status.volume = Int($0) }
-                            ), in: 0...100, step: 1) { editing in
-                                if !editing { controller.send("VOL:\(controller.status.volume)") }
-                            }.tint(.cyan)
-                            Button {
-                                controller.send("MUTE:\(controller.status.mute ? 0 : 1)")
-                            } label: {
-                                Label(controller.status.mute ? "Némítás kikapcsolása" : "Némítás", systemImage: controller.status.mute ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                                    .frame(maxWidth: .infinity).padding(12).background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 12))
-                            }.foregroundStyle(.white)
-                        }
-
-                        panel {
-                            Text("ÖTSÁVOS EQ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
-                            ForEach(0..<5, id: \.self) { i in
-                                VStack(spacing: 4) {
-                                    HStack {
-                                        Text(bands[i]).foregroundStyle(.white.opacity(0.85))
-                                        Spacer()
-                                        Text("\(controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0) dB").foregroundStyle(.cyan).monospacedDigit()
-                                    }.font(.subheadline)
-                                    Slider(value: Binding(
-                                        get: { Double(controller.status.eq.indices.contains(i) ? controller.status.eq[i] : 0) },
-                                        set: { value in
-                                            while controller.status.eq.count < 5 { controller.status.eq.append(0) }
-                                            controller.status.eq[i] = Int(value)
-                                        }
-                                    ), in: -12...12, step: 1) { editing in
-                                        if !editing { controller.send("EQ:\(i):\(controller.status.eq[i])") }
-                                    }.tint(.cyan)
-                                }
-                            }
-                            Text("Az EQ jelenleg a vezérlőparancsokat teszteli; a tényleges DSP később kerül bekötésre.")
-                                .font(.caption).foregroundStyle(.white.opacity(0.55))
-                        }
-
-                        panel {
-                            Text("KAPCSOLAT").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
-                            Text(controller.bleState).font(.footnote).foregroundStyle(.cyan).frame(maxWidth: .infinity, alignment: .leading)
-                            HStack {
-                                Button { controller.scanBLE() } label: {
-                                    Label("BLE keresés", systemImage: "dot.radiowaves.left.and.right")
-                                        .frame(maxWidth: .infinity).padding(12).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 12))
-                                }
-                                Button { controller.disconnectBLE() } label: {
-                                    Text("Leválasztás").frame(maxWidth: .infinity).padding(12).background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 12))
-                                }.foregroundStyle(.white)
-                            }
-                            TextField("ESP32 IP-címe (pl. 192.168.1.100)", text: $controller.deviceIP)
-                                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
-                            Button { controller.refreshWiFi() } label: {
-                                Label("Wi-Fi kapcsolat tesztelése", systemImage: "wifi")
-                                    .frame(maxWidth: .infinity).padding(12).background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 12))
-                            }.foregroundStyle(.white)
-                            Text(controller.wifiState).font(.footnote).foregroundStyle(.cyan).frame(maxWidth: .infinity, alignment: .leading)
-                            Text("Wi-Fi vezérléshez az iPhone és az ESP32 ugyanazon az otthoni hálózaton legyen.")
-                                .font(.caption).foregroundStyle(.white.opacity(0.55))
-                        }
-
-                        panel {
-                            Text("ESP32 WI-FI BEÁLLÍTÁSA").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
-                            TextField("Wi-Fi hálózat neve", text: $controller.wifiSSID)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
-                            SecureField("Wi-Fi jelszó", text: $controller.wifiPassword)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
-                            Button { controller.configureWiFi() } label: {
-                                Label("Wi-Fi beállítása Bluetoothon", systemImage: "wifi.badge.plus")
-                                    .frame(maxWidth: .infinity).padding(12).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                            Text("A küldéshez legyen aktív Bluetooth-kapcsolat az ESP32-vel. A hálózati adatok csak a párosított Bluetooth-kapcsolaton mennek át.")
-                                .font(.caption).foregroundStyle(.white.opacity(0.55))
-                        }
-
-                        panel {
-                            Text("PARANCS KÜLDÉSE").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
-                            HStack(spacing: 8) {
-                                TextField("Pl. VOL:40 vagy MUTE:1", text: $controller.commandText)
-                                    .textInputAutocapitalization(.characters).autocorrectionDisabled()
-                                    .submitLabel(.send).onSubmit { controller.sendTypedCommand() }
-                                    .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
-                                Button { controller.sendTypedCommand() } label: {
-                                    Image(systemName: "paperplane.fill").frame(width: 44, height: 44).background(Color.cyan).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 10))
-                                }
-                            }
-                            Text("Támogatott: VOL:0–100, INPUT:0–4, MUTE:0/1, EQ:0–4:-12–12")
-                                .font(.caption).foregroundStyle(.white.opacity(0.55))
-                            if !controller.commandMessage.isEmpty {
-                                Text(controller.commandMessage).font(.footnote).foregroundStyle(.cyan)
-                            }
-                        }
-
-                        Text("NOVA Hi-Fi Remote · vezérlőprototípus").font(.caption2).foregroundStyle(.white.opacity(0.4)).padding(.bottom, 20)
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-            .toolbar(.hidden, for: .navigationBar)
-        }
-        .preferredColorScheme(.dark)
-    }
-
-    @ViewBuilder private func panel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 13, content: content)
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(red: 0.06, green: 0.13, blue: 0.20).opacity(0.95))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.09), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-    }
-}
-
-@main
-struct NOVAHiFiRemoteApp: App {
-    var body: some Scene {
-        WindowGroup { ContentView() }
-    }
-}
+                                .padding(12)
+                                .background(controller.status.currentRadio == station.name ? Color.cyan.opacity(0.15) : Color(
