@@ -14,6 +14,8 @@ struct DeviceStatus: Decodable {
     var mute: Bool = false
     var eq: [Int] = [0, 0, 0, 0, 0]
     var currentRadio: String = "Rádió 1"
+    var brightness: Int = 80
+    var saverMode: Int = 0
     var lastCommand: String = "Nincs kapcsolat"
     var wifi: String = ""
 }
@@ -198,7 +200,7 @@ extension HiFiController: CBPeripheralDelegate {
 }
 
 // ==========================================
-// SEGYÉD PANEL VIEW (Minden nézet eléri)
+// SEGYÉD PANEL VIEW
 // ==========================================
 struct CardPanel<Content: View>: View {
     let content: Content
@@ -235,6 +237,11 @@ struct ContentView: View {
             RadioStationView(controller: controller)
                 .tabItem {
                     Label("Rádió", systemImage: "radio.fill")
+                }
+            
+            DisplaySettingsView(controller: controller)
+                .tabItem {
+                    Label("Kijelző", systemImage: "display")
                 }
             
             SettingsView(controller: controller)
@@ -422,7 +429,98 @@ struct RadioStationView: View {
     }
 }
 
-// 3. KAPCSOLAT NÉZET
+// 3. KIJELZŐ BEÁLLÍTÁSOK NÉZET (ÚJ!)
+struct DisplaySettingsView: View {
+    @ObservedObject var controller: HiFiController
+    private let savers = ["VU-meter", "Mátrix Spectrum", "Óra / Dátum", "Kijelző Kikapcsolva"]
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.025, green: 0.07, blue: 0.12), Color(red: 0.05, green: 0.15, blue: 0.23)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            
+            ScrollView {
+                VStack(spacing: 16) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("KIJELZŐ").font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.cyan)
+                            Text("FÉNYERŐ ÉS KÉPERNYŐVÉDŐ").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(.white.opacity(0.65))
+                        }
+                        Spacer()
+                        Image(systemName: "display").font(.system(size: 26, weight: .medium)).foregroundStyle(.cyan)
+                    }.padding(.top, 8)
+
+                    // Fényerő szabályozás
+                    CardPanel {
+                        HStack {
+                            Text("TFT FÉNYERŐ").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                            Spacer()
+                            Text("\(controller.status.brightness)%").font(.title2.bold()).foregroundStyle(.cyan)
+                        }
+                        Slider(value: Binding(
+                            get: { Double(controller.status.brightness) },
+                            set: { controller.status.brightness = Int($0) }
+                        ), in: 10...100, step: 5) { editing in
+                            if !editing { controller.send("BRIGHT:\(controller.status.brightness)") }
+                        }.tint(.cyan)
+                    }
+
+                    // Képernyővédő / Visualizer kiválasztása
+                    CardPanel {
+                        Text("KÉPERNYŐKÍMÉLŐ MÓD").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                        VStack(spacing: 8) {
+                            ForEach(savers.indices, id: \.self) { i in
+                                Button {
+                                    controller.status.saverMode = i
+                                    controller.send("SAVER:\(i)")
+                                } label: {
+                                    HStack {
+                                        Text(savers[i]).font(.subheadline.weight(.semibold))
+                                        Spacer()
+                                        if controller.status.saverMode == i {
+                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.black)
+                                        }
+                                    }
+                                    .padding(12)
+                                    .background(controller.status.saverMode == i ? Color.cyan : Color.white.opacity(0.08))
+                                    .foregroundStyle(controller.status.saverMode == i ? Color.black : Color.white)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                }
+                            }
+                        }
+                    }
+
+                    // Gyors gombok
+                    CardPanel {
+                        Text("GYORS AKCIÓK").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
+                        HStack(spacing: 10) {
+                            Button {
+                                controller.send("DISPOFF:1")
+                            } label: {
+                                Label("Kijelző Altatása", systemImage: "moon.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity).padding(12)
+                                    .background(Color.white.opacity(0.08))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }.foregroundStyle(.white)
+                            
+                            Button {
+                                controller.send("DISPOFF:0")
+                            } label: {
+                                Label("Ébresztés", systemImage: "sun.max.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity).padding(12)
+                                    .background(Color.cyan)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }.foregroundStyle(.black)
+                        }
+                    }
+                }.padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+// 4. KAPCSOLAT NÉZET
 struct SettingsView: View {
     @ObservedObject var controller: HiFiController
 
@@ -486,7 +584,7 @@ struct SettingsView: View {
     }
 }
 
-// 4. KONZOL NÉZET
+// 5. KONZOL NÉZET
 struct ConsoleView: View {
     @ObservedObject var controller: HiFiController
 
@@ -507,7 +605,7 @@ struct ConsoleView: View {
                 CardPanel {
                     Text("PARANCS KÜLDÉSE").font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.white.opacity(0.6))
                     HStack(spacing: 8) {
-                        TextField("Pl. VOL:40, RADIO:1", text: $controller.commandText)
+                        TextField("Pl. BRIGHT:80, SAVER:1", text: $controller.commandText)
                             .textInputAutocapitalization(.characters).autocorrectionDisabled()
                             .submitLabel(.send).onSubmit { controller.sendTypedCommand() }
                             .padding(12).background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 10)).foregroundStyle(.white)
